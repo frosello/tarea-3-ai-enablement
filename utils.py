@@ -132,6 +132,126 @@ def load_docx_file(file_path: str) -> str:
         raise
 
 
+def load_csv_file(file_path: str) -> str:
+    """
+    Carga un archivo CSV y lo convierte a texto estructurado.
+    
+    Args:
+        file_path (str): Ruta del archivo CSV
+        
+    Returns:
+        str: Contenido del CSV formateado como texto
+        
+    Raises:
+        ImportError: Si pandas no está instalado
+        ValueError: Si no se puede leer el archivo CSV
+    """
+    try:
+        import pandas as pd
+        
+        # Intentar detectar el separador automáticamente
+        separadores = [',', ';', '\t', '|']
+        df = None
+        separador_usado = None
+        
+        for sep in separadores:
+            try:
+                # Intentar leer con diferentes codificaciones
+                encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+                for encoding in encodings:
+                    try:
+                        df_temp = pd.read_csv(file_path, sep=sep, encoding=encoding)
+                        # Si tiene más de una columna, probablemente sea el separador correcto
+                        if len(df_temp.columns) > 1:
+                            df = df_temp
+                            separador_usado = sep
+                            logger.info(f"CSV {file_path} cargado con separador '{sep}' y codificación '{encoding}'")
+                            break
+                    except (UnicodeDecodeError, pd.errors.EmptyDataError):
+                        continue
+                
+                if df is not None:
+                    break
+                    
+            except Exception:
+                continue
+        
+        # Si no se pudo detectar automáticamente, usar coma por defecto
+        if df is None:
+            try:
+                df = pd.read_csv(file_path, encoding='utf-8')
+                separador_usado = ','
+                logger.info(f"CSV {file_path} cargado con separador por defecto ','")
+            except Exception:
+                df = pd.read_csv(file_path, encoding='latin-1')
+                separador_usado = ','
+                logger.info(f"CSV {file_path} cargado con separador ',' y codificación 'latin-1'")
+        
+        if df.empty:
+            raise ValueError("El archivo CSV está vacío")
+        
+        # Convertir a texto estructurado
+        text_parts = []
+        
+        # Añadir información del archivo
+        text_parts.append(f"=== ARCHIVO CSV: {Path(file_path).name} ===")
+        text_parts.append(f"Filas: {len(df)}, Columnas: {len(df.columns)}")
+        text_parts.append(f"Separador detectado: '{separador_usado}'")
+        text_parts.append("")
+        
+        # Añadir nombres de columnas
+        text_parts.append("=== COLUMNAS ===")
+        for i, col in enumerate(df.columns, 1):
+            text_parts.append(f"{i}. {col}")
+        text_parts.append("")
+        
+        # Añadir estadísticas básicas si hay columnas numéricas
+        numeric_cols = df.select_dtypes(include=['number']).columns
+        if len(numeric_cols) > 0:
+            text_parts.append("=== ESTADÍSTICAS NUMÉRICAS ===")
+            for col in numeric_cols:
+                stats = df[col].describe()
+                text_parts.append(f"Columna: {col}")
+                text_parts.append(f"  - Promedio: {stats['mean']:.2f}")
+                text_parts.append(f"  - Mediana: {stats['50%']:.2f}")
+                text_parts.append(f"  - Mínimo: {stats['min']:.2f}")
+                text_parts.append(f"  - Máximo: {stats['max']:.2f}")
+            text_parts.append("")
+        
+        # Añadir una muestra de los datos (primeras 10 filas)
+        text_parts.append("=== MUESTRA DE DATOS (Primeras 10 filas) ===")
+        sample_size = min(10, len(df))
+        for i, row in df.head(sample_size).iterrows():
+            text_parts.append(f"Fila {i + 1}:")
+            for col in df.columns:
+                value = str(row[col])
+                # Truncar valores muy largos
+                if len(value) > 100:
+                    value = value[:97] + "..."
+                text_parts.append(f"  - {col}: {value}")
+            text_parts.append("")
+        
+        # Si hay más de 10 filas, mencionar que hay más datos
+        if len(df) > 10:
+            text_parts.append(f"... y {len(df) - 10} filas adicionales")
+            text_parts.append("")
+        
+        # Añadir resumen de tipos de datos
+        text_parts.append("=== TIPOS DE DATOS ===")
+        for col, dtype in df.dtypes.items():
+            text_parts.append(f"{col}: {str(dtype)}")
+        
+        full_text = "\n".join(text_parts)
+        logger.info(f"CSV {file_path} procesado: {len(df)} filas, {len(df.columns)} columnas")
+        return full_text
+        
+    except ImportError:
+        raise ImportError("pandas no está instalado. Instala con: pip install pandas")
+    except Exception as e:
+        logger.error(f"Error cargando archivo CSV {file_path}: {e}")
+        raise
+
+
 def load_document(file_path: str) -> Tuple[str, Dict[str, Any]]:
     """
     Carga un documento de cualquier tipo soportado.
@@ -176,6 +296,9 @@ def load_document(file_path: str) -> Tuple[str, Dict[str, Any]]:
             logger.warning(f"Archivo .DOC detectado: {file_path}. Considera convertirlo a .DOCX para mejor compatibilidad")
         content = load_docx_file(str(file_path))
         metadata["file_type"] = "word"
+    elif extension == '.csv':
+        content = load_csv_file(str(file_path))
+        metadata["file_type"] = "csv"
     else:
         # Intentar cargar como texto plano
         try:
@@ -206,7 +329,7 @@ def get_supported_file_types() -> List[str]:
     Returns:
         List[str]: Lista de extensiones soportadas
     """
-    return ['.txt', '.pdf', '.docx', '.doc']
+    return ['.txt', '.pdf', '.docx', '.doc', '.csv']
 
 
 def get_file_type_description(extension: str) -> str:
@@ -223,7 +346,8 @@ def get_file_type_description(extension: str) -> str:
         '.txt': 'Archivos de texto plano',
         '.pdf': 'Documentos PDF',
         '.docx': 'Documentos Word (DOCX)',
-        '.doc': 'Documentos Word (DOC)'
+        '.doc': 'Documentos Word (DOC)',
+        '.csv': 'Archivos CSV (Comma Separated Values)'
     }
     return descriptions.get(extension.lower(), 'Archivo de texto')
 
